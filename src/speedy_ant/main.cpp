@@ -4,6 +4,12 @@
 #include <algorithm>
 #include <chrono>
 
+/*
+Baseline:
+Step 4999999: (-95976,-95952) facing south on a white square. Bounding box: -95979, -95958 -> 29, 22
+Done. 5000000 iterations in 3014ms, or 1.65892e+07 it/s.
+*/
+
 enum Direction {
     N,
     E,
@@ -104,7 +110,7 @@ void gogoant(uint64_t n) {
 
 int main(int argc, char** argv) {
 
-    gogoant(10000000);
+    gogoant(5000000);
 
     return 0;
 }
