@@ -12,6 +12,11 @@ Step 4999999: (-95976,-95952) facing south on a white square. Bounding box: -959
 Done. 5000000 iterations in 3014ms, or 1.65892e+07 it/s.
 */
 
+/*
+Baseline + improved running with crosschecks.
+Step 4999999: (-95976,-95952) facing south on a black square.   Bounding box: -95979, -95958 -> 29, 22   Supertile: -188, -375   Tile: 7, 6   Offset in Tile: 8, 15   Word: 6383   Bit: 8   Word in map: 00000000000000000000111000100110
+Done. 5000000 iterations in 3614ms, or 1.38351e+07 it/s.
+*/
 
 /*
 Strategy:
@@ -23,7 +28,7 @@ hw.l1dcachesize: 65536
 hw.l2cachesize: 4194304
 hw.pagesize: 16384
 
-Start by allocating an aligned 16384 byte supertile, and arranging the space within it ot minimize cache misses, first at the cache line level and then at the page level. Each tile spans a certain spatial bounding box, and when we need to go outside that box we'll allocate a new page. There should be no advantage in managing allocations above the page size, since we don't care about contiguity. We can, for instance, use a normal map to manage supertiles.
+Start by allocating an aligned 16384 byte supertile, and arranging the space within it to minimize cache misses, first at the cache line level and then at the page level. Each tile spans a certain spatial bounding box, and when we need to go outside that box we'll allocate a new page. There should be no advantage in managing allocations above the page size, since we don't care about contiguity. We can, for instance, use a normal map to manage supertiles.
 
 One tile:  128 bytes wrapped to 32x32 bits    (each x is a bit)
 
@@ -33,7 +38,6 @@ One tile:  128 bytes wrapped to 32x32 bits    (each x is a bit)
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
-                    x  x  x  x  x  x (*) x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
@@ -54,6 +58,7 @@ One tile:  128 bytes wrapped to 32x32 bits    (each x is a bit)
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
                     x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
+                    x  o  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
 H_TILE              x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
   ^                 x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
   |                 x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x    x  x  x  x  x  x  x  x   
@@ -68,8 +73,19 @@ One supertile: 16384 bytes wrapped to 16x8 tiles    (each X is a tile)
                     X X X X X X X X  X X X X X X X X
                     X X X X X X X X  X X X X X X X X
                     X X X X X X X X  X X X X X X X X
-                    X X X X X X X X  X(*)X X X X X X
                     X X X X X X X X  X X X X X X X X
+                    X O X X X X X X  X X X X X X X X
+
+Tile: 1, 0
+Offset in Tile: 1, 5
+1 * 1 + 0 * 32 + 
+
+
+Step 3081: (-1,-6) facing west on a white square.   Supertile: -1, -1   Tile: 0, 0   Offset in Tile: 1, 6   Word: 6   Bit: 1   Word in map: 00000000000000000000000010110100
+Step 10734: (-33,-5) facing north on a white square.   Supertile: -1, -1   Tile: 1, 0   Offset in Tile: 1, 5   Word: 6   Bit: 1   Word in map: 01010101000000001111101001100010
+
+
+
 
 
 This supertile is h_st = 8x32 = 256 bits tall and w_st = 16x32 = 512 bits wide.
@@ -102,42 +118,36 @@ Offset within tile buffer is 294 * 32 + 57, or 9465.
 
 using Word = uint32_t;
 
-constexpr int32_t PAGE_SIZE = 16384;
-constexpr int32_t PAGE_SIZE_WORDS = PAGE_SIZE / sizeof(Word);
+constexpr int64_t PAGE_SIZE = 16384;
+constexpr int64_t PAGE_SIZE_WORDS = PAGE_SIZE / sizeof(Word);
 
-constexpr int32_t CACHE_LINE_SIZE = 128;
+constexpr int64_t CACHE_LINE_SIZE = 128;
 
-constexpr int32_t W_TILE_WORDS = 1;                         // simplest if this just stays 1, and that's fine for any common cache line size
-constexpr int32_t W_TILE = 8 * W_TILE_WORDS * sizeof(Word); // should always be size of word in bits
-constexpr int32_t H_TILE_WORDS = (CACHE_LINE_SIZE / W_TILE_WORDS) / sizeof(Word);
-constexpr int32_t H_TILE = CACHE_LINE_SIZE * 8 / W_TILE;    // W_TILE * H_TILE is the size of a cache line
+constexpr int64_t W_TILE_WORDS = 1;                         // simplest if this just stays 1, and that's fine for any common cache line size
+constexpr int64_t W_TILE = 8 * W_TILE_WORDS * sizeof(Word); // should always be size of word in bits
+constexpr int64_t H_TILE_WORDS = (CACHE_LINE_SIZE / W_TILE_WORDS) / sizeof(Word);
+constexpr int64_t H_TILE = CACHE_LINE_SIZE * 8 / W_TILE;    // W_TILE * H_TILE is the size of a cache line
 
-constexpr int32_t W_SUPERTILE_TILES = 16; 
-constexpr int32_t H_SUPERTILE_TILES = (PAGE_SIZE / W_SUPERTILE_TILES) / CACHE_LINE_SIZE;
+constexpr int64_t TILE_WORDS = W_TILE_WORDS * H_TILE_WORDS;
 
-constexpr int32_t W_SUPERTILE = W_SUPERTILE_TILES * W_TILE;
-constexpr int32_t H_SUPERTILE = H_SUPERTILE_TILES * H_TILE;
+constexpr int64_t W_SUPERTILE_TILES = 16; 
+constexpr int64_t H_SUPERTILE_TILES = (PAGE_SIZE / W_SUPERTILE_TILES) / CACHE_LINE_SIZE;
+
+constexpr int64_t W_SUPERTILE = W_SUPERTILE_TILES * W_TILE;
+constexpr int64_t H_SUPERTILE = H_SUPERTILE_TILES * H_TILE;
 
 
 
 constexpr size_t SupertileWordCount = W_SUPERTILE/sizeof(Word) * H_SUPERTILE;
 using Supertile = std::array<Word, SupertileWordCount>;
 
-using TileAddress = std::pair<int32_t, int32_t>;
-using XYPair = std::pair<int32_t, int32_t>;
+using TileAddress = std::pair<int64_t, int64_t>;
+using XYPair = std::pair<int64_t, int64_t>;
 using SuperTileMap = std::map<TileAddress, std::unique_ptr<Supertile>>;
 
 TileAddress supertileAddress(const XYPair& loc) {
     return {std::floor(loc.first / W_SUPERTILE), std::floor(loc.second / H_SUPERTILE)};
 } 
-
-// TileAddress tileAddressWithinSupertile(const XYPair& loc) {
-//     return {std::floor(std::abs(loc.first % W_SUPERTILE) / W_TILE), std::floor(std::abs(loc.second % H_SUPERTILE) / H_TILE)};
-// }
-
-// size_t wordAddressWithinTile(const XYPair& loc) {
-
-// }
 
 enum Direction {
     N,
@@ -175,13 +185,13 @@ void gogoant(uint64_t n) {
     uint64_t start = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
     // baseline trail map
-    std::set<std::pair<int, int>> trail;
+    std::set<std::pair<int64_t, int64_t>> trail;
 
     // cumulative ant bounding box 
-    int max_x = 0;
-    int max_y = 0;
-    int min_x = 0;
-    int min_y = 0;
+    int64_t max_x = 0;
+    int64_t max_y = 0;
+    int64_t min_x = 0;
+    int64_t min_y = 0;
 
     // current ant position, direction, and color
     XYPair loc = {0,0};
@@ -203,9 +213,12 @@ void gogoant(uint64_t n) {
     // the supertile address of the last ant location
     TileAddress lastSupertileAddress = {INT32_MAX, INT32_MAX};
     
-    int mismatches = 0;
+    size_t mismatches = 0;
+    size_t superTilesCreated = 0;
+    size_t superTilesRetrieved = 0;
+    size_t superTilesRetrieveAvoided = 0;
 
-    for (int i = 0; i < n; i++) {
+    for (uint64_t i = 0; i < n; i++) {
 
         currSupertileAddress = {
             std::floor(float(loc.first) / W_SUPERTILE), 
@@ -222,13 +235,14 @@ void gogoant(uint64_t n) {
             std::abs(loc.second % H_SUPERTILE) % H_TILE
         };
 
-        size_t wordAddressInSupertile = 
-            (tileAddressInSupertile.first * W_TILE_WORDS + tileAddressInSupertile.second * H_TILE_WORDS) // offset to tile base
+        uint64_t wordAddressInSupertile = 
+            (tileAddressInSupertile.first * TILE_WORDS + 
+            tileAddressInSupertile.second * TILE_WORDS * TILE_WORDS) // offset to tile base
             + std::abs(loc.second % H_SUPERTILE) % H_TILE;
         
-        size_t bitAddressInWord = std::abs(loc.first % W_SUPERTILE) % W_TILE;
+        size_t bitAddressInWord = addressInTile.first;
 
-        Word mask = 0x1 << bitAddressInWord;
+        // Word mask = 0x1 << bitAddressInWord;
 
         if (currSupertileAddress != lastSupertileAddress) {
             std::swap(lastSupertileAddress, cachedSupertileAddress);
@@ -239,16 +253,18 @@ void gogoant(uint64_t n) {
                 lastSupertileAddress = currSupertileAddress;
                 auto existingTileIt = supertiles.find(currSupertileAddress);
                 if (existingTileIt == supertiles.end()) {
-                    std::cout << "Created new supertile at " << currSupertileAddress.first << ", " << currSupertileAddress.second << std::endl;
+                    // std::cout << "Created new supertile at " << currSupertileAddress.first << ", " << currSupertileAddress.second << std::endl;
                     supertiles[currSupertileAddress] = std::make_unique<Supertile>();
                     auto newTileIt = supertiles.find(currSupertileAddress);
                     currentSuperTile = newTileIt->second.get();
                     std::memset(currentSuperTile, 0, SupertileWordCount);
+                    superTilesCreated++;
                 } else {
-                    std::cout << "Looked up existing supertile at " << currSupertileAddress.first << ", " << currSupertileAddress.second << std::endl;
+                    superTilesRetrieved++;
                 }
                 currentSuperTile = existingTileIt->second.get();
-            // } else {
+            } else {
+                superTilesRetrieveAvoided++;
                 // std::cout << "Success." << std::endl;
             }
         }
@@ -260,8 +276,7 @@ void gogoant(uint64_t n) {
 
         std::bitset<32> wordInMap = currentSuperTile->data()[wordAddressInSupertile];
 
-        if (i % 10000 == 0) {
-        // if (i == n-1) {
+        if (i % 1000000 == 0) {
             std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
             std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
             std::cout << "   Bounding box: " << min_x << ", " << min_y << " -> " << max_x << ", " << max_y;
@@ -273,19 +288,15 @@ void gogoant(uint64_t n) {
             std::cout << "   Word in map: " << wordInMap << std::endl;
         }
 
-        bool speedyColor = wordInMap[bitAddressInWord];
-        wordInMap[bitAddressInWord] = !speedyColor;
-        currentSuperTile->data()[wordAddressInSupertile] = wordInMap.to_ulong();
+        color = wordInMap[bitAddressInWord];
+        bool slowColor = trail.find(loc) != trail.end();
 
-        color = trail.find(loc) != trail.end();
-
-        if (color != speedyColor) {
+        if (color != slowColor) {
             std::cout << "COLOR MISMATCH at " << loc.first << "," << loc.second << "!" << std::endl;
             mismatches++;
         
             std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
             std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
-            std::cout << "   Bounding box: " << min_x << ", " << min_y << " -> " << max_x << ", " << max_y;
             std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
             std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
             std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
@@ -294,17 +305,20 @@ void gogoant(uint64_t n) {
             std::cout << "   Word in map: " << wordInMap << std::endl;
         }
 
+        wordInMap[bitAddressInWord] = !color;
+        currentSuperTile->data()[wordAddressInSupertile] = wordInMap.to_ulong();
+
 
         if (color) {
             dir -= 1;
-            color = false;
+            slowColor = false;
         } else {
             dir += 1;
-            color = true;
+            slowColor = true;
         }
         dir = dir % 4;
 
-        if (color) {
+        if (slowColor) {
             trail.insert(loc);
         } else {
             trail.erase(loc);
@@ -325,10 +339,17 @@ void gogoant(uint64_t n) {
             break;     
         }
 
-        // currSupertileAddress  = supertileAddress(loc);
-        // at this point we have the supertile in hand, but don't know where on it represents the current location
-        // auto tileAddress = tileAddressWithinSupertile(loc);
-
+        if (i == 4999999) {
+            std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
+            std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
+            std::cout << "   Bounding box: " << min_x << ", " << min_y << " -> " << max_x << ", " << max_y;
+            std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
+            std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
+            std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
+            std::cout << "   Word: " << wordAddressInSupertile;
+            std::cout << "   Bit: " << bitAddressInWord;
+            std::cout << "   Word in map: " << wordInMap << std::endl;
+        }
     }
 
     uint64_t end = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -336,6 +357,7 @@ void gogoant(uint64_t n) {
     float speed = (n*10000.0) / (end - start);
     std::cout << "Done. " << n << " iterations in " << end - start << "ms, or " << speed << " it/s." << std::endl;
     std::cout << mismatches << " mismatches." << std::endl;
+    std::cout << "Supertiles created: " << superTilesCreated << "  retrieved: " << superTilesRetrieved << "  avoided retrievals: " << superTilesRetrieveAvoided << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -343,6 +365,7 @@ int main(int argc, char** argv) {
     std::cout << "CACHE_LINE_SIZE: " << CACHE_LINE_SIZE << std::endl;
     std::cout << "PAGE_SIZE: " << PAGE_SIZE << std::endl;
     std::cout << "PAGE_SIZE_WORDS: " << PAGE_SIZE_WORDS << std::endl;
+    std::cout << "TILE_WORDS: " << TILE_WORDS << std::endl;
     std::cout << "W_SUPERTILE_TILES: " << W_SUPERTILE_TILES << std::endl;
     std::cout << "H_SUPERTILE_TILES: " << H_SUPERTILE_TILES << std::endl;
     std::cout << "W_SUPERTILE: " << W_SUPERTILE << std::endl;
@@ -352,7 +375,7 @@ int main(int argc, char** argv) {
     std::cout << "H_TILE_WORDS: " << H_TILE_WORDS << std::endl;
     std::cout << "H_TILE: " << H_TILE << std::endl;
 
-    gogoant(100000);
+    gogoant(5000000);
 
     return 0;
 }
