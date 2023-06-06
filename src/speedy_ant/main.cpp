@@ -19,6 +19,24 @@ Done. 5000000 iterations in 3614ms, or 1.38351e+07 it/s.
 */
 
 /*
+Improved implementation with baseline stripped out.
+Step 4999999: (-95976,-95952) facing south on a black square.   Bounding box: -95979, -95958 -> 29, 22   Supertile: -188, -375   Tile: 7, 6   Offset in Tile: 8, 15   Word: 6383   Bit: 8   Word in map: 00000000000000000000111000100110
+Done. 5000000 iterations in 477ms, or 1.04822e+08 it/s.
+*/
+
+/*
+Use raw bitwise ops instead of std::bitset
+Step 4999999: (-95976,-95952) facing south on a black square.   Bounding box: -95979, -95958 -> 29, 22   Supertile: -188, -375   Tile: 7, 6   Offset in Tile: 8, 15   Word: 6383   Bit: 8   Word in map: 00000000000000000000111000100110
+Done. 5000000 iterations in 339ms, or 1.47493e+08 it/s.
+*/
+
+/*
+Don't bother maintaining the bounding box. 
+Step 4999999: (-95976,-95952) facing south on a black square.   Supertile: -188, -375   Tile: 7, 6   Offset in Tile: 8, 15   Word: 6383   Bit: 8   Word in map: 00000000000000000000111000100110
+Done. 5000000 iterations in 219ms, or 2.2831e+08 it/s.
+*/
+
+/*
 Strategy:
 
 Allocate board space in square tiles the size of a cache line, which on my M2 is 128 bytes (though it's probably 64 bytes on an AMD64 machine). Each tile is square, or as close as possible. 128 bytes is 1024 bits, or 32*32 squares. This is enough space to cover most of the bounding box for the first several thousand steps. Further, allocate tiles in supertile increments matching the page size, ensuring that we minimize cache misses that go all the way to main memory. That 16384 bytes on the M2, or 128 tiles, or 8*16 tiles of 32*32 bits each.
@@ -76,17 +94,6 @@ One supertile: 16384 bytes wrapped to 16x8 tiles    (each X is a tile)
                     X X X X X X X X  X X X X X X X X
                     X O X X X X X X  X X X X X X X X
 
-Tile: 1, 0
-Offset in Tile: 1, 5
-1 * 1 + 0 * 32 + 
-
-
-Step 3081: (-1,-6) facing west on a white square.   Supertile: -1, -1   Tile: 0, 0   Offset in Tile: 1, 6   Word: 6   Bit: 1   Word in map: 00000000000000000000000010110100
-Step 10734: (-33,-5) facing north on a white square.   Supertile: -1, -1   Tile: 1, 0   Offset in Tile: 1, 5   Word: 6   Bit: 1   Word in map: 01010101000000001111101001100010
-
-
-
-
 
 This supertile is h_st = 8x32 = 256 bits tall and w_st = 16x32 = 512 bits wide.
 Tiles within are h_t = 32 bits and w_t = 32 bits
@@ -94,7 +101,7 @@ Tiles within are h_t = 32 bits and w_t = 32 bits
 We want to map this onto Cartesian space. What is the location in memory of the Cartesian point (x, y)? 
 It's located on supertile (floor(x / w_st), floor(y / h_st))
     within that supertile it's on tile at location (floor((x % w_st) / w_t), floor((y % h_st) / h_t)).
-    within that tile it's 
+    within that tile it's ?
 
 Example: Cartesian point (2342, 12345) 
 (Indicated in the above map)
@@ -184,15 +191,6 @@ void gogoant(uint64_t n) {
 
     uint64_t start = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
-    // baseline trail map
-    std::set<std::pair<int64_t, int64_t>> trail;
-
-    // cumulative ant bounding box 
-    int64_t max_x = 0;
-    int64_t max_y = 0;
-    int64_t min_x = 0;
-    int64_t min_y = 0;
-
     // current ant position, direction, and color
     XYPair loc = {0,0};
     uint8_t dir = 0;
@@ -242,7 +240,7 @@ void gogoant(uint64_t n) {
         
         size_t bitAddressInWord = addressInTile.first;
 
-        // Word mask = 0x1 << bitAddressInWord;
+        Word mask = 0x1 << bitAddressInWord;
 
         if (currSupertileAddress != lastSupertileAddress) {
             std::swap(lastSupertileAddress, cachedSupertileAddress);
@@ -265,64 +263,31 @@ void gogoant(uint64_t n) {
                 currentSuperTile = existingTileIt->second.get();
             } else {
                 superTilesRetrieveAvoided++;
-                // std::cout << "Success." << std::endl;
             }
         }
 
-        min_x = std::min(min_x, loc.first);
-        min_y = std::min(min_y, loc.second);
-        max_x = std::max(max_x, loc.first);
-        max_y = std::max(max_y, loc.second);
-
-        std::bitset<32> wordInMap = currentSuperTile->data()[wordAddressInSupertile];
+        Word wordInMap = currentSuperTile->data()[wordAddressInSupertile];
+        color = wordInMap & mask;
+        wordInMap ^= mask;
+        currentSuperTile->data()[wordAddressInSupertile] = wordInMap;
 
         if (i % 1000000 == 0) {
             std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
             std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
-            std::cout << "   Bounding box: " << min_x << ", " << min_y << " -> " << max_x << ", " << max_y;
             std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
             std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
             std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
             std::cout << "   Word: " << wordAddressInSupertile;
             std::cout << "   Bit: " << bitAddressInWord;
-            std::cout << "   Word in map: " << wordInMap << std::endl;
+            std::cout << "   Word in map: " << std::bitset<32>(wordInMap) << std::endl;
         }
-
-        color = wordInMap[bitAddressInWord];
-        bool slowColor = trail.find(loc) != trail.end();
-
-        if (color != slowColor) {
-            std::cout << "COLOR MISMATCH at " << loc.first << "," << loc.second << "!" << std::endl;
-            mismatches++;
-        
-            std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
-            std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
-            std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
-            std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
-            std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
-            std::cout << "   Word: " << wordAddressInSupertile;
-            std::cout << "   Bit: " << bitAddressInWord;
-            std::cout << "   Word in map: " << wordInMap << std::endl;
-        }
-
-        wordInMap[bitAddressInWord] = !color;
-        currentSuperTile->data()[wordAddressInSupertile] = wordInMap.to_ulong();
-
 
         if (color) {
             dir -= 1;
-            slowColor = false;
         } else {
             dir += 1;
-            slowColor = true;
         }
         dir = dir % 4;
-
-        if (slowColor) {
-            trail.insert(loc);
-        } else {
-            trail.erase(loc);
-        }
 
         switch (dir) {
         case 0:
@@ -337,18 +302,6 @@ void gogoant(uint64_t n) {
         case 3:
             loc.first--;
             break;     
-        }
-
-        if (i == 4999999) {
-            std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
-            std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
-            std::cout << "   Bounding box: " << min_x << ", " << min_y << " -> " << max_x << ", " << max_y;
-            std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
-            std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
-            std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
-            std::cout << "   Word: " << wordAddressInSupertile;
-            std::cout << "   Bit: " << bitAddressInWord;
-            std::cout << "   Word in map: " << wordInMap << std::endl;
         }
     }
 
@@ -375,7 +328,7 @@ int main(int argc, char** argv) {
     std::cout << "H_TILE_WORDS: " << H_TILE_WORDS << std::endl;
     std::cout << "H_TILE: " << H_TILE << std::endl;
 
-    gogoant(5000000);
+    gogoant(1000000000);
 
     return 0;
 }
