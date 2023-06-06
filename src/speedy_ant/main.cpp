@@ -186,8 +186,106 @@ const char* colorName(bool color) {
     return color ? "black" : "white";
 }
 
-void gogoant(uint64_t n) {
+
+
+
+
+
+class AntMap {
+
+public:
+
+    bool getAndSet(const XYPair& loc) {
+        
+        currSupertileAddress = {
+            std::floor(float(loc.first) / W_SUPERTILE), 
+            std::floor(float(loc.second) / H_SUPERTILE)
+        };
+
+        tileAddressInSupertile = {
+            std::floor(std::abs(loc.first % W_SUPERTILE) / W_TILE), 
+            std::floor(std::abs(loc.second % H_SUPERTILE) / H_TILE)
+        };
+
+        addressInTile = {
+            std::abs(loc.first % W_SUPERTILE) % W_TILE,
+            std::abs(loc.second % H_SUPERTILE) % H_TILE
+        };
+
+        wordAddressInSupertile = 
+            (tileAddressInSupertile.first * TILE_WORDS + 
+            tileAddressInSupertile.second * TILE_WORDS * TILE_WORDS) // offset to tile base
+            + std::abs(loc.second % H_SUPERTILE) % H_TILE;
+        
+        bitAddressInWord = addressInTile.first;
+
+        Word mask = 0x1 << bitAddressInWord;
+
+        if (currSupertileAddress != lastSupertileAddress) {
+            // try swapping with the cached supertile in case that fits better
+            std::swap(lastSupertileAddress, cachedSupertileAddress);
+            std::swap(currentSuperTile, cachedSupertile);
+            if (currSupertileAddress != lastSupertileAddress) {
+                lastSupertileAddress = currSupertileAddress;
+                auto existingTileIt = supertiles.find(currSupertileAddress);
+                if (existingTileIt == supertiles.end()) {
+                    supertiles[currSupertileAddress] = std::make_unique<Supertile>();
+                    auto newTileIt = supertiles.find(currSupertileAddress);
+                    currentSuperTile = newTileIt->second.get();
+                    std::memset(currentSuperTile, 0, SupertileWordCount);
+                    superTilesCreated++;
+                } else {
+                    currentSuperTile = existingTileIt->second.get();
+                    superTilesRetrieved++;
+                }
+            } else {
+                superTilesRetrieveAvoided++;
+            }
+        }
+
+        wordInMap = currentSuperTile->data()[wordAddressInSupertile];
+        bool color = wordInMap & mask;
+        wordInMap ^= mask;
+        currentSuperTile->data()[wordAddressInSupertile] = wordInMap;
+
+        return color;
+    }
+
+
+    // map of allocated supertiles, keyed on TileAddress
+    SuperTileMap supertiles;
+
+    // supertile address of current ant location
+    TileAddress currSupertileAddress  = {0,0};
+    // pointer to supertile of current ant location
+    Supertile* currentSuperTile;
+
+    // the supertile address of the last ant location
+    TileAddress lastSupertileAddress = {INT32_MAX, INT32_MAX};
+
+    // a cached supertile pointer to avoid repeated lookups when the ant is meandering near a supertile boundary
+    TileAddress cachedSupertileAddress = {INT32_MAX, INT32_MAX};
+    Supertile* cachedSupertile;
+
+    // nasty public leftovers, here to make logging easy
+    TileAddress tileAddressInSupertile;
+    TileAddress addressInTile;
+    uint64_t wordAddressInSupertile;
+    size_t bitAddressInWord;
+    Word wordInMap;
+
+    size_t superTilesCreated = 0;
+    size_t superTilesRetrieved = 0;
+    size_t superTilesRetrieveAvoided = 0;
+};
+
+
+
+
+void gogoant(uint64_t n, XYPair saltLoc) {
     using namespace std::chrono;
+
+    std::cout << "Running ant for " << n << " iterations. Placing salt at (" << saltLoc.first << ", " << saltLoc.second << ")." << std::endl;
 
     uint64_t start = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
@@ -196,90 +294,24 @@ void gogoant(uint64_t n) {
     uint8_t dir = 0;
     bool color = 0;
 
-    // supertile address of current ant location
-    TileAddress currSupertileAddress  = {0,0};
-    // pointer to supertile of current ant location
-    Supertile* currentSuperTile;
+    AntMap map;
 
-    // a cached supertile pointer to avoid repeated lookups when the ant is meandering near a supertile boundary
-    TileAddress cachedSupertileAddress = {INT32_MAX, INT32_MAX};
-    Supertile* cachedSupertile;
+    // place the salt
+    map.getAndSet(saltLoc);
 
-    // map of allocated supertiles, keyed on TileAddress
-    SuperTileMap supertiles;
+    for (uint64_t i = 1; i <= n; i++) {
 
-    // the supertile address of the last ant location
-    TileAddress lastSupertileAddress = {INT32_MAX, INT32_MAX};
-    
-    size_t mismatches = 0;
-    size_t superTilesCreated = 0;
-    size_t superTilesRetrieved = 0;
-    size_t superTilesRetrieveAvoided = 0;
+        color = map.getAndSet(loc);
 
-    for (uint64_t i = 0; i < n; i++) {
-
-        currSupertileAddress = {
-            std::floor(float(loc.first) / W_SUPERTILE), 
-            std::floor(float(loc.second) / H_SUPERTILE)
-        };
-
-        TileAddress tileAddressInSupertile = {
-            std::floor(std::abs(loc.first % W_SUPERTILE) / W_TILE), 
-            std::floor(std::abs(loc.second % H_SUPERTILE) / H_TILE)
-        };
-
-        TileAddress addressInTile = {
-            std::abs(loc.first % W_SUPERTILE) % W_TILE,
-            std::abs(loc.second % H_SUPERTILE) % H_TILE
-        };
-
-        uint64_t wordAddressInSupertile = 
-            (tileAddressInSupertile.first * TILE_WORDS + 
-            tileAddressInSupertile.second * TILE_WORDS * TILE_WORDS) // offset to tile base
-            + std::abs(loc.second % H_SUPERTILE) % H_TILE;
-        
-        size_t bitAddressInWord = addressInTile.first;
-
-        Word mask = 0x1 << bitAddressInWord;
-
-        if (currSupertileAddress != lastSupertileAddress) {
-            std::swap(lastSupertileAddress, cachedSupertileAddress);
-            std::swap(currentSuperTile, cachedSupertile);
-            // std::cout << "Swapped latest tiles looking for " << currSupertileAddress.first << ", " << currSupertileAddress.second << "... ";
-            if (currSupertileAddress != lastSupertileAddress) {
-                // std::cout << "     Lookup required anyway!" << std::endl;
-                lastSupertileAddress = currSupertileAddress;
-                auto existingTileIt = supertiles.find(currSupertileAddress);
-                if (existingTileIt == supertiles.end()) {
-                    // std::cout << "Created new supertile at " << currSupertileAddress.first << ", " << currSupertileAddress.second << std::endl;
-                    supertiles[currSupertileAddress] = std::make_unique<Supertile>();
-                    auto newTileIt = supertiles.find(currSupertileAddress);
-                    currentSuperTile = newTileIt->second.get();
-                    std::memset(currentSuperTile, 0, SupertileWordCount);
-                    superTilesCreated++;
-                } else {
-                    superTilesRetrieved++;
-                }
-                currentSuperTile = existingTileIt->second.get();
-            } else {
-                superTilesRetrieveAvoided++;
-            }
-        }
-
-        Word wordInMap = currentSuperTile->data()[wordAddressInSupertile];
-        color = wordInMap & mask;
-        wordInMap ^= mask;
-        currentSuperTile->data()[wordAddressInSupertile] = wordInMap;
-
-        if (i % 1000000 == 0) {
+        if (i % 1000000 == 0 || i == n) {
             std::cout << "Step " << i << ": (" << loc.first << "," << loc.second << ") facing ";
             std::cout << directionName(dir) << " on a " << colorName(color) << " square.";
-            std::cout << "   Supertile: " << currSupertileAddress.first << ", " << currSupertileAddress.second;
-            std::cout << "   Tile: " << tileAddressInSupertile.first << ", " << tileAddressInSupertile.second;
-            std::cout << "   Offset in Tile: " << addressInTile.first << ", " << addressInTile.second;
-            std::cout << "   Word: " << wordAddressInSupertile;
-            std::cout << "   Bit: " << bitAddressInWord;
-            std::cout << "   Word in map: " << std::bitset<32>(wordInMap) << std::endl;
+            std::cout << "   Supertile: " << map.currSupertileAddress.first << ", " << map.currSupertileAddress.second;
+            std::cout << "   Tile: " << map.tileAddressInSupertile.first << ", " << map.tileAddressInSupertile.second;
+            std::cout << "   Offset in Tile: " << map.addressInTile.first << ", " << map.addressInTile.second;
+            std::cout << "   Word: " << map.wordAddressInSupertile;
+            std::cout << "   Bit: " << map.bitAddressInWord;
+            std::cout << "   Word in map: " << std::bitset<32>(map.wordInMap) << std::endl;
         }
 
         if (color) {
@@ -309,11 +341,21 @@ void gogoant(uint64_t n) {
 
     float speed = (n*10000.0) / (end - start);
     std::cout << "Done. " << n << " iterations in " << end - start << "ms, or " << speed << " it/s." << std::endl;
-    std::cout << mismatches << " mismatches." << std::endl;
-    std::cout << "Supertiles created: " << superTilesCreated << "  retrieved: " << superTilesRetrieved << "  avoided retrievals: " << superTilesRetrieveAvoided << std::endl;
+    std::cout << "Supertiles created: " << map.superTilesCreated << "  retrieved: " << map.superTilesRetrieved << "  avoided retrievals: " << map.superTilesRetrieveAvoided << std::endl;
 }
 
 int main(int argc, char** argv) {
+
+    uint64_t n = 1000000;
+    XYPair saltLoc = {1000, 1000};  // default salt will never be encountered
+
+    if (argc > 1) {
+        n = atol(argv[1]);
+    }
+    if (argc > 3) {
+        saltLoc.first = atol(argv[2]);
+        saltLoc.second = atol(argv[3]);
+    }
 
     std::cout << "CACHE_LINE_SIZE: " << CACHE_LINE_SIZE << std::endl;
     std::cout << "PAGE_SIZE: " << PAGE_SIZE << std::endl;
@@ -328,7 +370,7 @@ int main(int argc, char** argv) {
     std::cout << "H_TILE_WORDS: " << H_TILE_WORDS << std::endl;
     std::cout << "H_TILE: " << H_TILE << std::endl;
 
-    gogoant(1000000000);
+    gogoant(n, saltLoc);
 
     return 0;
 }
